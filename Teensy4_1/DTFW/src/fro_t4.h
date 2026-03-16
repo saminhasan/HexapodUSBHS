@@ -12,7 +12,7 @@ public:
   // Hardcoded tuning, no-arg ctor
   FRO_T4() {
     dt   = 0.001f;   // 1 kHz tick
-    T01  = 0.5f;   // seconds to move by 1.0 (0->1)
+    T01  = 0.1f;   // seconds to move by 1.0 (0->1)
     Tmin = dt;       // minimum move duration
     reset(0.0f);
   }

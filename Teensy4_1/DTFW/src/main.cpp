@@ -9,9 +9,9 @@ void setup()
         yield();
     usb.begin();
 
-    dev1.begin(115200);
-    dev2.begin(115200);
-    dev3.begin(115200);
+    dev1.begin(1000000);
+    dev2.begin(1000000);
+    dev3.begin(1000000);
 
     logInfof("Waiting for 3 USB-Serial slaves...");
     bool p1 = false, p2 = false, p3 = false;
