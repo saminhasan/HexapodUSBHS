@@ -340,7 +340,7 @@ void play()
         logInfof("ERR:MUST_BE_STAGED_OR_PAUSED state=%u", (uint8_t)sysState);
         return;
     }
-    fro.setFeedrate(1.0f);
+    fro.setFeedrate(1.0);
     sysState = SystemState::PLAYING;
     logInfof("OK:PLAYING fro=%.3f trajLen=%u idx=%u hasData=%d",
              fro.getFeedrate(), trajectory.length(), idx, hasData);
