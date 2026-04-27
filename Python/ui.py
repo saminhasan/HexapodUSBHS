@@ -26,7 +26,7 @@ def is_teensy_usb(dev: Device) -> bool:
 
 
 # ui must sanitize all values and stuff before sending to backend
-def button_callback(event, app=None) -> None:
+def button_callback(event, app) -> None:
     key, value = next(iter(event.items()))
 
     match key:
@@ -105,14 +105,14 @@ class App(ctk.CTk):
         # usbx hotplug (callbacks run on background thread; bounce into UI thread)
         usb.on_connected(self._usb_connected)
         usb.on_disconnected(self._usb_disconnected)
-        usb.start_monitor()  # Start the USB monitoring thread
+        usb.start_monitor()  # type: ignore # Start the USB monitoring thread
 
         self.update_port_list()
 
         self.font = ctk.CTkFont(family="Consolas", size=16, weight="bold")
         for child in self.winfo_children():
             try:
-                child.configure(font=self.font)
+                    child.configure(font=self.font)# type: ignore 
             except Exception:
                 pass
 
