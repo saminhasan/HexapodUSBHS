@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 2026-06-29 12:25:31,517 INFO hexapod [SerialServerProcess/Thread-1 (run)]: [recv] STATUS slave=1 t=106015167us err=False | L: θ=0.550 sp=0.549 ω=1.19 τ=2.94 31C rtt=495µs COMPLETE | R: θ=0.439 sp=0.455 ω=1.48 τ=1.44 31C rtt=499µs COMPLETE
 2026-06-29 12:25:31,528 INFO hexapod [SerialServerProcess/Thread-1 (run)]: [recv] STATUS slave=2 t=106023175us err=False | L: θ=0.477 sp=0.468 ω=-0.30 τ=4.79 31C rtt=510µs COMPLETE | R: θ=0.311 sp=0.342 ω=1.38 τ=5.71 31C rtt=507µs COMPLETE
 2026-06-29 12:25:31,530 INFO hexapod [SerialServerProcess/Thread-1 (run)]: [recv] JOG
@@ -4215,3 +4216,11 @@
 2026-06-29 12:26:14,596 INFO serial_server [SerialServerProcess/request_handler]: [handler] stopped
 2026-06-29 12:26:14,662 INFO serial_server [SerialServerProcess/MainThread]: [run] stopped
 2026-06-29 12:26:14,662 INFO ss_process [SerialServerProcess/MainThread]: [run_serial_server] server exited
+=======
+2026-06-22 03:27:28,893 INFO serial_server [SerialServerProcess/request_handler]: [handler] started
+2026-06-22 03:27:28,893 INFO serial_server [SerialServerProcess/MainThread]: [run] started
+2026-06-22 03:27:47,044 INFO serial_server [SerialServerProcess/request_handler]: [handler] received None -> shutdown
+2026-06-22 03:27:47,044 INFO serial_server [SerialServerProcess/request_handler]: [handler] stopped
+2026-06-22 03:27:47,081 INFO serial_server [SerialServerProcess/MainThread]: [run] stopped
+2026-06-22 03:27:47,081 INFO ss_process [SerialServerProcess/MainThread]: [run_serial_server] server exited
+>>>>>>> 1c38309f2d862e5877c7eace03cfe110b3e313b8

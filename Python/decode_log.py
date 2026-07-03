@@ -9,7 +9,8 @@ import tkinter as tk
 from tqdm import tqdm
 import customtkinter as ctk
 from dataclasses import dataclass
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 from tkinter import filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -76,7 +77,7 @@ def extract_axis_dfs(bin_path: str, verify_crc: bool = True) -> Tuple[Dict[int, 
     scan_limit = total_bytes - PKT_LEN + 1
     skip_until = 0
 
-    for index in tqdm(range(max(scan_limit, 0)), desc="Parsing packets", unit="byte"):
+    for index in tqdm(range(max(scan_limit, 0)), desc=f"Parsing {os.path.basename(bin_path)}", unit="byte"):
         if index < skip_until:
             continue
         if data[index] != START_BYTE:
@@ -157,65 +158,97 @@ def extract_axis_dfs(bin_path: str, verify_crc: bool = True) -> Tuple[Dict[int, 
     return dfs, jog_df
 
 
-def prompt_for_bin_file() -> Optional[str]:
+# Module-level function — must be picklable for ProcessPoolExecutor (Windows spawn).
+def _export_file_task(args: Tuple) -> Tuple[str, Optional[str]]:
+    out_path, dfs, jog_df = args
+    try:
+        with pd.ExcelWriter(out_path) as writer:
+            for i in range(1, 7):
+                df = dfs.get(i)
+                (pd.DataFrame() if df is None else df).to_excel(writer, sheet_name=f"Axis_{i}", index=False)
+            jog_df.to_excel(writer, sheet_name="JOG", index=False)
+        return out_path, None
+    except Exception as exc:
+        return out_path, str(exc)
+
+
+def prompt_for_bin_files() -> List[str]:
     dialog_root = tk.Tk()
     dialog_root.withdraw()
 
-    file_path = filedialog.askopenfilename(
+    paths = filedialog.askopenfilenames(
         initialdir=os.path.join(os.path.dirname(__file__), "output"),
-        title="Select log file",
+        title="Select log file(s)",
         filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
         parent=dialog_root,
     )
 
     dialog_root.destroy()
-    return file_path or None
+    return list(paths)
+
+
+FileData = Tuple[str, Dict[int, pd.DataFrame], pd.DataFrame]
 
 
 class LogDecoderApp:
-    def __init__(self, bin_path: str, dfs: Dict[int, pd.DataFrame], jog_df: pd.DataFrame) -> None:
-        self.bin_path = bin_path
-        self.dfs = dfs
-        self.jog_df = jog_df
+    def __init__(self, file_data: List[FileData]) -> None:
+        self.file_data = file_data
         self.app_closing = False
+        self._axis_tabviews: Dict[str, ctk.CTkTabview] = {}
 
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
         self.root = ctk.CTk()
-        self.root.title(f"Axis Plots - {os.path.basename(self.bin_path)}")
+        self.root.title("Axis Plots")
         self.root.geometry("1280x720")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.tabview = ctk.CTkTabview(self.root)
-        self.tabview.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self.file_tabview = ctk.CTkTabview(self.root)
+        self.file_tabview.pack(fill="both", expand=True, padx=8, pady=(8, 4))
 
         controls = ctk.CTkFrame(self.root)
         controls.pack(side="bottom", fill="x", padx=8, pady=(4, 8))
 
-        self.save_btn = ctk.CTkButton(controls, text="Save as Excel", command=self.save_dfs_to_excel)
-        self.save_btn.pack(side="left", padx=8, pady=8)
+        self.export_current_btn = ctk.CTkButton(controls, text="Export Current", command=self.export_current)
+        self.export_current_btn.pack(side="left", padx=8, pady=8)
+
+        self.export_all_btn = ctk.CTkButton(controls, text="Export All", command=self.export_all)
+        self.export_all_btn.pack(side="left", padx=4, pady=8)
 
         self.status_label = ctk.CTkLabel(controls, text="")
         self.status_label.pack(side="left", padx=8, pady=8)
 
-        self.build_axis_tabs()
+        self._build_file_tabs()
+        self.root.after(50, self._prerender_all)
 
     def on_close(self) -> None:
         self.app_closing = True
-        plt.close("all")
         self.root.quit()
         self.root.destroy()
 
     def run(self) -> None:
         self.root.mainloop()
 
-    def build_axis_tabs(self) -> None:
+    def _build_file_tabs(self) -> None:
+        for bin_path, dfs, jog_df in self.file_data:
+            tab_name = os.path.basename(bin_path)
+            self.file_tabview.add(tab_name)
+            tab = self.file_tabview.tab(tab_name)
+            axis_tv = self._build_axis_tabs_in(tab, dfs, jog_df)
+            self._axis_tabviews[tab_name] = axis_tv
+
+    def _build_axis_tabs_in(
+        self, parent: ctk.CTkFrame, dfs: Dict[int, pd.DataFrame], jog_df: pd.DataFrame
+    ) -> ctk.CTkTabview:
+        axis_tabview = ctk.CTkTabview(parent)
+        axis_tabview.pack(fill="both", expand=True)
+
         for axis in range(1, 7):
-            df = self.dfs.get(axis)
+            df = dfs.get(axis)
             tab_name = f"Axis {axis}"
-            self.tabview.add(tab_name)
-            tab = self.tabview.tab(tab_name)
+            axis_tabview.add(tab_name)
+            tab = axis_tabview.tab(tab_name)
 
             if df is None or df.empty:
                 msg = ctk.CTkLabel(tab, text=f"No data for axis {axis}")
@@ -224,15 +257,14 @@ class LogDecoderApp:
 
             time_s = df["timestamp_us"].to_numpy(dtype="float64") * 1e-6
 
-            fig, axis_plot = plt.subplots()
-            # axis_plot.plot(time_s - time_s[0], df["setpoint"].to_numpy(), label="setpoint")
+            fig = Figure()
+            axis_plot = fig.add_subplot(111)
             axis_plot.plot(time_s - time_s[0], df["theta"].to_numpy(), label="theta")
 
-            # Plot JOG as setpoint
-            if not self.jog_df.empty:
+            if not jog_df.empty:
                 jog_col = f"j{axis}"
-                x_jog = np.arange(0, len(self.jog_df[jog_col])) / 1e3  # self.jog_df["packet_index"].to_numpy(dtype="float64")
-                axis_plot.plot(x_jog, self.jog_df[jog_col].to_numpy(dtype="float64"), label="setpoint")
+                x_jog = np.arange(0, len(jog_df[jog_col])) / 1e3
+                axis_plot.plot(x_jog, jog_df[jog_col].to_numpy(dtype="float64"), label="setpoint")
 
             axis_plot.set_title(f"Axis {axis}: setpoint, theta, & jog command vs time")
             axis_plot.set_xlabel("time (s)")
@@ -252,58 +284,148 @@ class LogDecoderApp:
             canvas.draw()
             canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
 
+        return axis_tabview
+
+    def _prerender_all(self) -> None:
+        first_file = os.path.basename(self.file_data[0][0]) if self.file_data else None
+        for file_basename, axis_tv in self._axis_tabviews.items():
+            self.file_tabview.set(file_basename)
+            for i in range(1, 7):
+                try:
+                    axis_tv.set(f"Axis {i}")
+                    self.root.update_idletasks()
+                except Exception:
+                    pass
+        if first_file:
+            self.file_tabview.set(first_file)
+            if first_file in self._axis_tabviews:
+                try:
+                    self._axis_tabviews[first_file].set("Axis 1")
+                except Exception:
+                    pass
+        self.root.update_idletasks()
+
+    def _get_active_file_data(self) -> Optional[FileData]:
+        active_tab = self.file_tabview.get()
+        for entry in self.file_data:
+            if os.path.basename(entry[0]) == active_tab:
+                return entry
+        return None
+
     def _on_export_done(self, out_path: Optional[str] = None, error: Optional[str] = None) -> None:
         if self.app_closing or not self.root.winfo_exists():
             return
-
-        self.save_btn.configure(state="normal", text="Save as Excel")
+        self.export_current_btn.configure(state="normal", text="Export Current")
+        self.export_all_btn.configure(state="normal", text="Export All")
         self.status_label.configure(text="")
-
         if error is None:
-            messagebox.showinfo("Export complete", f"Saved Excel file:\n{out_path}", parent=self.root)
+            messagebox.showinfo("Export complete", f"Saved:\n{out_path}", parent=self.root)
         else:
-            messagebox.showerror("Export failed", f"Could not save Excel file:\n{error}", parent=self.root)
+            messagebox.showerror("Export failed", f"Could not save:\n{error}", parent=self.root)
 
-    def _export_worker(self, out_path: str) -> None:
+    def _set_status(self, text: str) -> None:
+        if not self.app_closing and self.root.winfo_exists():
+            self.root.after(0, lambda: self.status_label.configure(text=text))
+
+    # Single file: thread + per-sheet tqdm (sequential, no IPC overhead).
+    def _export_worker(self, out_path: str, dfs: Dict[int, pd.DataFrame], jog_df: pd.DataFrame) -> None:
+        sheets = [(f"Axis_{i}", dfs.get(i)) for i in range(1, 7)] + [("JOG", jog_df)]
         try:
             with pd.ExcelWriter(out_path) as writer:
-                for axis in range(1, 7):
-                    df = self.dfs.get(axis)
-                    if df is None:
-                        pd.DataFrame().to_excel(writer, sheet_name=f"Axis_{axis}", index=False)
-                    else:
-                        df.to_excel(writer, sheet_name=f"Axis_{axis}", index=False)
-                self.jog_df.to_excel(writer, sheet_name="JOG", index=False)
+                for sheet_name, df in tqdm(sheets, desc="Writing sheets"):
+                    self._set_status(f"Writing {sheet_name}...")
+                    (pd.DataFrame() if df is None else df).to_excel(writer, sheet_name=sheet_name, index=False)
             self.root.after(0, lambda: self._on_export_done(out_path=out_path))
         except Exception as exc:
             self.root.after(0, lambda: self._on_export_done(error=str(exc)))
 
-    def save_dfs_to_excel(self) -> None:
-        default_name = f"{os.path.splitext(os.path.basename(self.bin_path))[0]}_axes.xlsx"
+    # Multi file: ProcessPoolExecutor — N files written in parallel, one process per file.
+    def _export_all_worker(self, entries: List[Tuple[str, str, Dict[int, pd.DataFrame], pd.DataFrame]]) -> None:
+        n = len(entries)
+        args_list = [(out_path, dfs, jog_df) for _, out_path, dfs, jog_df in entries]
+        out_to_basename = {out_path: os.path.basename(bin_path) for bin_path, out_path, _, _ in entries}
+
+        saved: List[str] = []
+        errors: List[str] = []
+
+        workers = min(n, os.cpu_count() or 4)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_export_file_task, args): args[0] for args in args_list}
+            for future in tqdm(as_completed(futures), total=n, desc="Exporting files"):
+                out_path = futures[future]
+                basename = out_to_basename[out_path]
+                result_path, err = future.result()
+                if err:
+                    errors.append(f"{basename}: {err}")
+                else:
+                    saved.append(result_path)
+                done = len(saved) + len(errors)
+                self._set_status(f"{done}/{n} done — {basename}")
+
+        def finish() -> None:
+            if self.app_closing or not self.root.winfo_exists():
+                return
+            self.export_current_btn.configure(state="normal", text="Export Current")
+            self.export_all_btn.configure(state="normal", text="Export All")
+            self.status_label.configure(text="")
+            if errors:
+                messagebox.showerror("Export errors", "\n".join(errors), parent=self.root)
+            else:
+                messagebox.showinfo(
+                    "Export complete",
+                    f"Saved {len(saved)} file(s):\n" + "\n".join(saved),
+                    parent=self.root,
+                )
+
+        self.root.after(0, finish)
+
+    def export_current(self) -> None:
+        entry = self._get_active_file_data()
+        if entry is None:
+            return
+        bin_path, dfs, jog_df = entry
+        default_name = f"{os.path.splitext(os.path.basename(bin_path))[0]}_axes.xlsx"
         out_path = filedialog.asksaveasfilename(
             title="Save Excel file",
             defaultextension=".xlsx",
             initialfile=default_name,
             filetypes=[("Excel Workbook", "*.xlsx")],
         )
-
         if not out_path:
             return
+        self.export_current_btn.configure(state="disabled", text="Exporting...")
+        self.export_all_btn.configure(state="disabled")
+        self.status_label.configure(text="Starting export...")
+        threading.Thread(target=self._export_worker, args=(out_path, dfs, jog_df), daemon=True).start()
 
-        self.save_btn.configure(state="disabled", text="Exporting...")
-        self.status_label.configure(text="Exporting Excel in background...")
-
-        threading.Thread(target=self._export_worker, args=(out_path,), daemon=True).start()
+    def export_all(self) -> None:
+        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "bin2excel")
+        os.makedirs(out_dir, exist_ok=True)
+        entries: List[Tuple[str, str, Dict[int, pd.DataFrame], pd.DataFrame]] = []
+        for bin_path, dfs, jog_df in self.file_data:
+            stem = os.path.splitext(os.path.basename(bin_path))[0]
+            entries.append((bin_path, os.path.join(out_dir, f"{stem}_axes.xlsx"), dfs, jog_df))
+        self.export_current_btn.configure(state="disabled")
+        self.export_all_btn.configure(state="disabled", text="Exporting...")
+        self.status_label.configure(text=f"Exporting {len(entries)} file(s) in parallel...")
+        threading.Thread(target=self._export_all_worker, args=(entries,), daemon=True).start()
 
 
 def main() -> int:
-    bin_path = prompt_for_bin_file()
-    if not bin_path:
-        print("No file selected. Exiting.")
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    paths = prompt_for_bin_files()
+    if not paths:
+        print("No files selected. Exiting.")
         return 0
 
-    dfs, jog_df = extract_axis_dfs(bin_path, verify_crc=False)
-    app = LogDecoderApp(bin_path=bin_path, dfs=dfs, jog_df=jog_df)
+    file_data: List[FileData] = []
+    for path in paths:
+        dfs, jog_df = extract_axis_dfs(path, verify_crc=False)
+        file_data.append((path, dfs, jog_df))
+
+    app = LogDecoderApp(file_data=file_data)
     app.run()
     return 0
 
