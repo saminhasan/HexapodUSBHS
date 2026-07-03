@@ -1,0 +1,6 @@
+2026-06-22 03:27:28,893 INFO serial_server [SerialServerProcess/request_handler]: [handler] started
+2026-06-22 03:27:28,893 INFO serial_server [SerialServerProcess/MainThread]: [run] started
+2026-06-22 03:27:47,044 INFO serial_server [SerialServerProcess/request_handler]: [handler] received None -> shutdown
+2026-06-22 03:27:47,044 INFO serial_server [SerialServerProcess/request_handler]: [handler] stopped
+2026-06-22 03:27:47,081 INFO serial_server [SerialServerProcess/MainThread]: [run] stopped
+2026-06-22 03:27:47,081 INFO ss_process [SerialServerProcess/MainThread]: [run_serial_server] server exited
